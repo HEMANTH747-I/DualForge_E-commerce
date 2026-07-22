@@ -1,0 +1,38 @@
+# DualForge E-Commerce Platform .gitignore
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+.pnpm-store/
+
+# Maven / Java Build Output
+target/
+backend/target/
+*.class
+*.jar
+*.war
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+.DS_Store
+
+# Local Database & Logs
+backend/data/
+data/
+*.log
+
+# Build Artifacts
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
