@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -110,24 +111,41 @@ public class AuthService {
             // Create refresh token
             RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId(), userAgent, ipAddress);
 
-            // Record log events
-            recordLoginHistory(user.getId(), ipAddress, userAgent, "SUCCESS", null);
+            // 1. Record log events (safe side-effect)
+            try {
+                recordLoginHistory(user.getId(), ipAddress, userAgent, "SUCCESS", null);
+            } catch (Exception e) {
+                System.err.println("[AuthService] Warning: Failed to record login history: " + e.getMessage());
+            }
             
-            activityLogRepository.save(new ActivityLog(
-                    user.getId(),
-                    user.getUsername(),
-                    "LOGIN",
-                    "User authenticated successfully via JWT token. Session active.",
-                    ipAddress,
-                    LocalDateTime.now()
-            ));
+            // 2. Activity Log (MongoDB) - Async so offline MongoDB NEVER blocks or delays login
+            new Thread(() -> {
+                try {
+                    if (activityLogRepository != null) {
+                        activityLogRepository.save(new ActivityLog(
+                                user.getId(),
+                                user.getUsername(),
+                                "LOGIN",
+                                "User authenticated successfully via JWT token. Session active.",
+                                ipAddress,
+                                LocalDateTime.now()
+                        ));
+                    }
+                } catch (Exception e) {
+                    System.err.println("[AuthService] Note: MongoDB activity logging skipped (offline/disabled): " + e.getMessage());
+                }
+            }).start();
 
-            // Send Security alert email
-            otpService.sendEmailAlert(
-                    user.getEmail(), 
-                    "DualForge Security Alert: New Login Detected", 
-                    "Hello " + user.getFirstName() + ",\n\nWe detected a new login to your DualForge account from IP: " + ipAddress + " using device: " + userAgent + ".\nIf this wasn't you, please secure your password immediately."
-            );
+            // 3. Send Security alert email (safe side-effect)
+            try {
+                otpService.sendEmailAlert(
+                        user.getEmail(), 
+                        "DualForge Security Alert: New Login Detected", 
+                        "Hello " + user.getFirstName() + ",\n\nWe detected a new login to your DualForge account from IP: " + ipAddress + " using device: " + userAgent + ".\nIf this wasn't you, please secure your password immediately."
+                );
+            } catch (Exception e) {
+                System.err.println("[AuthService] Note: Security alert email skipped: " + e.getMessage());
+            }
 
             return new JwtResponse(
                     jwt,
@@ -140,10 +158,13 @@ public class AuthService {
                     user.getLastName()
             );
 
-        } catch (Exception e) {
+        } catch (AuthenticationException e) {
+            // FIX: Only Spring Security authentication failures (wrong password, locked, disabled)
+            // should increment the brute-force lockout counter. Other runtime exceptions
+            // (DB errors, token creation, activity log failures) must NOT penalize the user.
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
-            
+
             if (attempts >= 5) {
                 user.setLockoutExpiry(LocalDateTime.now().plusMinutes(15));
                 user.setAccountStatus(AccountStatus.LOCKED);
@@ -155,6 +176,12 @@ public class AuthService {
                 recordLoginHistory(user.getId(), ipAddress, userAgent, "FAILED", "BAD CREDENTIALS");
                 throw new RuntimeException("Invalid credentials. Remaining attempts: " + (5 - attempts));
             }
+        } catch (Exception e) {
+            // FIX: Non-authentication errors (DB issues, token creation, activity log failures)
+            // must NOT count as failed login attempts — report as a server error instead.
+            System.err.println("[AuthService] Server error during login for user " + user.getUsername() + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("A server error occurred during sign-in. Please try again.");
         }
     }
 
@@ -386,6 +413,10 @@ public class AuthService {
                 status,
                 failureReason
         );
-        loginHistoryRepository.save(history);
+        try {
+            loginHistoryRepository.save(history);
+        } catch (Exception e) {
+            System.err.println("[AuthService] Warning: Could not save login history: " + e.getMessage());
+        }
     }
 }

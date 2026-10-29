@@ -107,15 +107,23 @@ public class OrderService {
         // Clear the cart
         cartService.clearCart(userId);
 
-        // MongoDB Audit Logs
-        activityLogRepository.save(new ActivityLog(
-                user.getId(),
-                user.getUsername(),
-                "ORDER_PLACE",
-                "Placed order #" + finalizedOrder.getId() + " total: $" + totalAmount + " (discount: $" + discount + ") via " + paymentMethod,
-                "127.0.0.1",
-                LocalDateTime.now()
-        ));
+        // MongoDB Audit Logs (Async / non-blocking)
+        final double finalTotal = totalAmount;
+        final double finalDiscount = discount;
+        new Thread(() -> {
+            try {
+                if (activityLogRepository != null) {
+                    activityLogRepository.save(new ActivityLog(
+                            user.getId(),
+                            user.getUsername(),
+                            "ORDER_PLACE",
+                            "Placed order #" + finalizedOrder.getId() + " total: $" + finalTotal + " (discount: $" + finalDiscount + ") via " + paymentMethod,
+                            "127.0.0.1",
+                            LocalDateTime.now()
+                    ));
+                }
+            } catch (Exception ignored) {}
+        }).start();
 
         return finalizedOrder;
     }
@@ -237,15 +245,21 @@ public class OrderService {
         }
         orderRepository.save(order);
 
-        // MongoDB Audit Log
-        activityLogRepository.save(new ActivityLog(
-                user.getId(),
-                user.getUsername(),
-                "ORDER_ITEM_STATUS_UPDATE",
-                "Order Item #" + orderItemId + " (Product: " + item.getProduct().getName() + ") status updated to: " + newStatus.name(),
-                "127.0.0.1",
-                LocalDateTime.now()
-        ));
+        // MongoDB Audit Log (Async / non-blocking)
+        new Thread(() -> {
+            try {
+                if (activityLogRepository != null) {
+                    activityLogRepository.save(new ActivityLog(
+                            user.getId(),
+                            user.getUsername(),
+                            "ORDER_ITEM_STATUS_UPDATE",
+                            "Order Item #" + orderItemId + " (Product: " + item.getProduct().getName() + ") status updated to: " + newStatus.name(),
+                            "127.0.0.1",
+                            LocalDateTime.now()
+                    ));
+                }
+            } catch (Exception ignored) {}
+        }).start();
 
         return updatedItem;
     }
